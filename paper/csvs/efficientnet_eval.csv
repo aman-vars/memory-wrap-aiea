@@ -1,0 +1,5 @@
+strategy,accuracy,percent_changed,percent_corrected,percent_corrupted
+baseline_random,74.0,0.0,0.0,0.0
+same_class,80.0,10.0,6.0,0.0
+different_class,46.0,46.0,2.0,30.0
+single_repeated,72.0,38.0,14.0,16.0
