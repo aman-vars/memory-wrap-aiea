@@ -1,5 +1,5 @@
 
-model: mobilenet # mobilenet, efficientnet, googlenet, shufflenet, densenet, resnet18, shufflenet1x, resnet34, densenet169.
+model: resnet18 # mobilenet, efficientnet, googlenet, shufflenet, densenet, resnet18, shufflenet1x, resnet34, densenet169.
 save: True
 train_examples: 5000 # tested: [1000,2000,5000,100000]. The last one is the full dataset configuration
 runs: 1
