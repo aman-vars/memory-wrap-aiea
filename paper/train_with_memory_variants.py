@@ -16,7 +16,12 @@ from typing import Dict, List, Tuple
 absl.flags.DEFINE_string("modality", None, "std, memory or encoder_memory")
 absl.flags.DEFINE_bool("continue_train", False, "std, memory or mlp")
 absl.flags.DEFINE_integer("log_interval",100,"Log interval between prints during training process")
-absl.flags.DEFINE_enum("strategy", "baseline", ["baseline", "sameclass", "differentclass"], "Memory construction strategy for memory-based training.") # stricter 
+absl.flags.DEFINE_enum(
+    "memory_strategy",
+    "baseline",
+    ["baseline", "same_class", "different_class"],
+    "Memory construction strategy for memory-based training.",
+) # stricter 
 absl.flags.mark_flag_as_required("modality")
 FLAGS = absl.flags.FLAGS
 
@@ -61,9 +66,9 @@ def build_memory(strategy: str, y: torch.Tensor, mem_loader: torch.utils.data.Da
     # Batch-level memory uses one class anchor from the current training batch.
     anchor_label = int(y[0].item())
 
-    if strategy == "sameclass":
+    if strategy == "same_class":
         candidate_indices = class_to_indices[anchor_label]
-    elif strategy == "differentclass":
+    elif strategy == "different_class":
         other_labels = [lbl for lbl in class_to_indices.keys() if lbl != anchor_label]
         if not other_labels:
             raise RuntimeError("No alternative class available for different_class strategy.")
@@ -248,7 +253,7 @@ def run_experiment(config:dict,modality:str):
 
          # training process
         if modality == 'memory' or modality == 'encoder_memory':
-            model = train_memory_model(model, [train_loader, mem_loader], optimizer, scheduler, loss_criterion, config[dataset_name]['num_epochs'], device=device, memory_strategy=FLAGS.strategy, memory_dataset=memory_dataset, class_to_indices=class_to_indices, memory_size=memory_size, rng=rng)
+            model = train_memory_model(model, [train_loader, mem_loader], optimizer, scheduler, loss_criterion, config[dataset_name]['num_epochs'], device=device, memory_strategy=FLAGS.memory_strategy, memory_dataset=memory_dataset, class_to_indices=class_to_indices, memory_size=memory_size, rng=rng)
             train_time = time.time()
 
             cum_acc =  []
