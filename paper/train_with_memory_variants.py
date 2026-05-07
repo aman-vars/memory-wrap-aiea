@@ -61,9 +61,9 @@ def build_memory(strategy: str, y: torch.Tensor, mem_loader: torch.utils.data.Da
     # Batch-level memory uses one class anchor from the current training batch.
     anchor_label = int(y[0].item())
 
-    if strategy == "same_class":
+    if strategy == "sameclass":
         candidate_indices = class_to_indices[anchor_label]
-    elif strategy == "different_class":
+    elif strategy == "differentclass":
         other_labels = [lbl for lbl in class_to_indices.keys() if lbl != anchor_label]
         if not other_labels:
             raise RuntimeError("No alternative class available for different_class strategy.")
