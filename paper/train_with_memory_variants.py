@@ -16,12 +16,7 @@ from typing import Dict, List, Tuple
 absl.flags.DEFINE_string("modality", None, "std, memory or encoder_memory")
 absl.flags.DEFINE_bool("continue_train", False, "std, memory or mlp")
 absl.flags.DEFINE_integer("log_interval",100,"Log interval between prints during training process")
-absl.flags.DEFINE_enum(
-    "memory_strategy",
-    "baseline",
-    ["baseline", "same_class", "different_class"],
-    "Memory construction strategy for memory-based training.",
-) # stricter 
+absl.flags.DEFINE_enum("strategy", "baseline", ["baseline", "sameclass", "differentclass"], "Memory construction strategy for memory-based training.") # stricter 
 absl.flags.mark_flag_as_required("modality")
 FLAGS = absl.flags.FLAGS
 
