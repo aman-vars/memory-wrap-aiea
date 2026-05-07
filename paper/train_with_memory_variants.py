@@ -248,7 +248,7 @@ def run_experiment(config:dict,modality:str):
 
          # training process
         if modality == 'memory' or modality == 'encoder_memory':
-            model = train_memory_model(model, [train_loader, mem_loader], optimizer, scheduler, loss_criterion, config[dataset_name]['num_epochs'], device=device, memory_strategy=FLAGS.memory_strategy, memory_dataset=memory_dataset, class_to_indices=class_to_indices, memory_size=memory_size, rng=rng)
+            model = train_memory_model(model, [train_loader, mem_loader], optimizer, scheduler, loss_criterion, config[dataset_name]['num_epochs'], device=device, memory_strategy=FLAGS.strategy, memory_dataset=memory_dataset, class_to_indices=class_to_indices, memory_size=memory_size, rng=rng)
             train_time = time.time()
 
             cum_acc =  []
