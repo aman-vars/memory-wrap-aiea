@@ -278,7 +278,7 @@ def run_experiment(config:dict,modality:str):
 
         # save
         if save and path_saving_model:
-            saved_name = "{}.pt".format(run+1)
+            saved_name = "{}_{}.pt".format(FLAGS.memory_strategy, run+1)
             save_path = os.path.join(path_saving_model, saved_name)
             torch.save({'model_state_dict':model.state_dict(),
             'train_examples': config['train_examples'],
