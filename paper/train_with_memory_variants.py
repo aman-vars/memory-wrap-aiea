@@ -19,7 +19,7 @@ absl.flags.DEFINE_integer("log_interval",100,"Log interval between prints during
 absl.flags.DEFINE_enum(
     "memory_strategy",
     "baseline",
-    ["baseline", "same_class", "different_class"],
+    ["baseline", "same_class", "different_class", "top_k"],
     "Memory construction strategy for memory-based training.",
 ) # stricter 
 absl.flags.mark_flag_as_required("modality")
@@ -54,16 +54,38 @@ def build_class_index_map(memory_dataset: torch.utils.data.Dataset) -> Dict[int,
     return class_to_indices
 
 
-def build_memory(strategy: str, y: torch.Tensor, mem_loader: torch.utils.data.DataLoader, memory_dataset: torch.utils.data.Dataset, class_to_indices: Dict[int, List[int]], memory_size: int, rng: random.Random) -> torch.Tensor:
+def compute_top_k_nearest_indices(anchor_image: torch.Tensor, memory_dataset: torch.utils.data.Dataset, k: int) -> List[int]:
+    """Returns indices of the k closest training images to `anchor_image` in raw pixel L2 distance."""
+    anchor_flat = anchor_image.view(-1)
+    dist_idx = [] # [(distance from anchor, idx in memory dataset)]
+    for idx in range(len(memory_dataset)):
+        candidate_img = memory_dataset[idx][0]
+        candidate_flat = candidate_img.cpu().view(-1) # flattens
+        dist = torch.norm(anchor_flat - candidate_flat, p=2)
+        dist_idx.append((dist.item(), idx))
+    dist_idx.sort(key=lambda t: t[0])
+    k_safe = min(k, len(dist_idx)) 
+    return [dist_idx[i][1] for i in range(k_safe)]
+
+
+def build_memory(strategy: str, data: torch.Tensor, y: torch.Tensor, mem_loader: torch.utils.data.DataLoader, memory_dataset: torch.utils.data.Dataset, class_to_indices: Dict[int, List[int]], memory_size: int, rng: random.Random) -> torch.Tensor:
     """Build one batch-level memory tensor with shape [memory_size, C, H, W]."""
     if strategy == "baseline":
         memory_input, _ = next(iter(mem_loader))
         return memory_input
 
+    if strategy == "top_k":
+        if data.numel() == 0:
+            raise RuntimeError("Empty input batch encountered while building top_k memory.")
+        batch_anchor = data.mean(dim=0).cpu()
+        nearest_indices = compute_top_k_nearest_indices(batch_anchor, memory_dataset, memory_size)
+        memory_set = [memory_dataset[idx][0] for idx in nearest_indices]
+        return torch.stack(memory_set, dim=0)
+
     if y.numel() == 0:
         raise RuntimeError("Empty label batch encountered while building memory.")
 
-    # Batch-level memory uses one class anchor from the current training batch.
+    # Batch-level memory uses one class anchor from the current training batch (first label).
     anchor_label = int(y[0].item())
 
     if strategy == "same_class":
@@ -117,7 +139,7 @@ def train_memory_model(model:torch.nn.Module,loaders:List[torch.utils.data.DataL
             # input
             data = data.to(device)
             y = y.to(device)
-            memory_input = build_memory(strategy=memory_strategy, y=y, mem_loader=mem_loader, memory_dataset=memory_dataset, class_to_indices=class_to_indices, memory_size=memory_size, rng=rng)
+            memory_input = build_memory(strategy=memory_strategy, data=data, y=y, mem_loader=mem_loader, memory_dataset=memory_dataset, class_to_indices=class_to_indices, memory_size=memory_size, rng=rng)
             memory_input = memory_input.to(device)
             
             # perform training step
