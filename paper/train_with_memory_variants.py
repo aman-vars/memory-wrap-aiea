@@ -19,7 +19,7 @@ absl.flags.DEFINE_integer("log_interval",100,"Log interval between prints during
 absl.flags.DEFINE_enum(
     "memory_strategy",
     "baseline",
-    ["baseline", "same_class", "different_class", "top_k", "cluster_based"],
+    ["baseline", "same_class", "different_class", "top_k", "clusters"],
     "Memory construction strategy for memory-based training.",
 ) # stricter 
 absl.flags.mark_flag_as_required("modality")
@@ -54,28 +54,24 @@ def build_class_index_map(memory_dataset: torch.utils.data.Dataset) -> Dict[int,
     return class_to_indices
 
 
-def build_memory_clusters(
-    memory_dataset: torch.utils.data.Dataset,
-    num_clusters: int,
-    rng: random.Random,
-) -> Tuple[torch.Tensor, Dict[int, List[int]]]:
-    """Pick random memory images as centroids (flattened pixels), assign each sample to nearest centroid in L2.
-
-    No learned embeddings: distances are raw flattened tensors, same convention as other memory helpers.
-    """
+def build_memory_clusters(memory_dataset: torch.utils.data.Dataset, num_clusters: int, rng: random.Random) -> Tuple[torch.Tensor, Dict[int, List[int]]]:
+    """Picks random memory images as centroids (flattened pixels). Assigns each sample to nearest centroid in L2."""
     n = len(memory_dataset)
     if n == 0:
         raise RuntimeError("Cannot cluster an empty memory dataset.")
     k = min(num_clusters, n)
-    centroid_sample_indices = rng.sample(range(n), k=k)
-    centroid_rows: List[torch.Tensor] = []
-    for ds_idx in centroid_sample_indices:
+    
+    # picks a `k` mem imgs at random that will act as reference for centroids  # essentially initializes centroids
+    centroid_sample_indices = rng.sample(range(n), k=k) 
+    centroid_rows = []
+    for ds_idx in centroid_sample_indices: 
         img = memory_dataset[ds_idx][0].cpu()
         centroid_rows.append(img.view(-1))
     cluster_centroids = torch.stack(centroid_rows, dim=0)
 
-    cluster_to_indices: Dict[int, List[int]] = {c: [] for c in range(k)}
-    for idx in range(n):
+    # assigns every image in mem dataset to nearest centroid
+    cluster_to_indices = {c: [] for c in range(k)}
+    for idx in range(n): 
         sample_flat = memory_dataset[idx][0].cpu().view(-1)
         dists = torch.norm(cluster_centroids - sample_flat, p=2, dim=1)
         cluster_id = int(torch.argmin(dists).item())
@@ -98,23 +94,14 @@ def compute_top_k_nearest_indices(anchor_image: torch.Tensor, memory_dataset: to
     return [dist_idx[i][1] for i in range(k_safe)]
 
 
-def build_memory(
-    strategy: str,
-    data: torch.Tensor,
-    y: torch.Tensor,
-    mem_loader: torch.utils.data.DataLoader,
-    memory_dataset: torch.utils.data.Dataset,
-    class_to_indices: Dict[int, List[int]],
-    memory_size: int,
-    rng: random.Random,
-    cluster_centroids: torch.Tensor,
-    cluster_to_indices: Dict[int, List[int]],
-) -> torch.Tensor:
+def build_memory(strategy: str, data: torch.Tensor, y: torch.Tensor, mem_loader: torch.utils.data.DataLoader, memory_dataset: torch.utils.data.Dataset, class_to_indices: Dict[int, List[int]], memory_size: int, rng: random.Random, cluster_centroids: torch.Tensor, cluster_to_indices: Dict[int, List[int]]) -> torch.Tensor:
     """Build one batch-level memory tensor with shape [memory_size, C, H, W]."""
+    # baseline (random shuffling) 
     if strategy == "baseline":
         memory_input, _ = next(iter(mem_loader))
         return memory_input
 
+    # top k 
     if strategy == "top_k":
         if data.numel() == 0:
             raise RuntimeError("Empty input batch encountered while building top_k memory.")
@@ -123,12 +110,12 @@ def build_memory(
         memory_set = [memory_dataset[idx][0] for idx in nearest_indices]
         return torch.stack(memory_set, dim=0)
 
-    # Nearest precomputed pixel-space cluster: sample memory only from that cluster's indices.
-    if strategy == "cluster_based":
+    # clustering
+    if strategy == "clusters":
         if data.numel() == 0:
-            raise RuntimeError("Empty input batch encountered while building cluster_based memory.")
+            raise RuntimeError("Empty input batch encountered while building memory for clusters strategy.")
         if cluster_centroids.numel() == 0 or not cluster_to_indices:
-            raise RuntimeError("cluster_based requires precomputed cluster_centroids and cluster_to_indices.")
+            raise RuntimeError("clusters strategy requires precomputed cluster_centroids and cluster_to_indices.")
         batch_anchor = data.mean(dim=0).cpu()
         anchor_flat = batch_anchor.view(-1)
         centroid_dists = torch.norm(cluster_centroids - anchor_flat, p=2, dim=1)
@@ -140,10 +127,9 @@ def build_memory(
         memory_images = [memory_dataset[idx][0] for idx in chosen_indices]
         return torch.stack(memory_images, dim=0)
 
+    # same class and different class and other (error) 
     if y.numel() == 0:
         raise RuntimeError("Empty label batch encountered while building memory.")
-
-    # Batch-level memory uses one class anchor from the current training batch (first label).
     anchor_label = int(y[0].item())
 
     if strategy == "same_class":
@@ -154,7 +140,7 @@ def build_memory(
             raise RuntimeError("No alternative class available for different_class strategy.")
         sampled_label = rng.choice(other_labels)
         candidate_indices = class_to_indices[sampled_label]
-    else:
+    else: # other
         raise ValueError(f"Unsupported memory strategy: {strategy}")
 
     chosen_indices = [rng.choice(candidate_indices) for _ in range(memory_size)]
@@ -197,18 +183,7 @@ def train_memory_model(model:torch.nn.Module,loaders:List[torch.utils.data.DataL
             # input
             data = data.to(device)
             y = y.to(device)
-            memory_input = build_memory(
-                strategy=memory_strategy,
-                data=data,
-                y=y,
-                mem_loader=mem_loader,
-                memory_dataset=memory_dataset,
-                class_to_indices=class_to_indices,
-                memory_size=memory_size,
-                rng=rng,
-                cluster_centroids=cluster_centroids,
-                cluster_to_indices=cluster_to_indices,
-            )
+            memory_input = build_memory(strategy=memory_strategy, data=data, y=y, mem_loader=mem_loader, memory_dataset=memory_dataset, class_to_indices=class_to_indices, memory_size=memory_size, rng=rng, cluster_centroids=cluster_centroids, cluster_to_indices=cluster_to_indices)
             memory_input = memory_input.to(device)
             
             # perform training step
@@ -342,33 +317,15 @@ def run_experiment(config:dict,modality:str):
         memory_size = int(config[dataset_name]['mem_examples'])
         rng = random.Random(run)
 
+        # precompute clusters if `clusters` strategy; otherwise empty
         cluster_centroids = torch.empty(0)
-        cluster_to_indices: Dict[int, List[int]] = {}
-        if FLAGS.memory_strategy == "cluster_based":
-            cluster_centroids, cluster_to_indices = build_memory_clusters(
-                memory_dataset,
-                num_clusters=10,
-                rng=rng,
-            )
+        cluster_to_indices = {}
+        if FLAGS.memory_strategy == "clusters":  
+            cluster_centroids, cluster_to_indices = build_memory_clusters(memory_dataset, num_clusters=10, rng=rng)
 
         # training process
         if modality == 'memory' or modality == 'encoder_memory':
-            model = train_memory_model(
-                model,
-                [train_loader, mem_loader],
-                optimizer,
-                scheduler,
-                loss_criterion,
-                config[dataset_name]['num_epochs'],
-                device=device,
-                memory_strategy=FLAGS.memory_strategy,
-                memory_dataset=memory_dataset,
-                class_to_indices=class_to_indices,
-                memory_size=memory_size,
-                rng=rng,
-                cluster_centroids=cluster_centroids,
-                cluster_to_indices=cluster_to_indices,
-            )
+            model = train_memory_model(model, [train_loader, mem_loader], optimizer, scheduler, loss_criterion, config[dataset_name]['num_epochs'], device=device, memory_strategy=FLAGS.memory_strategy, memory_dataset=memory_dataset, class_to_indices=class_to_indices, memory_size=memory_size, rng=rng, cluster_centroids=cluster_centroids, cluster_to_indices=cluster_to_indices)
             train_time = time.time()
 
             cum_acc =  []
