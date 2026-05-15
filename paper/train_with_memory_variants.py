@@ -321,7 +321,7 @@ def run_experiment(config:dict,modality:str):
         cluster_centroids = torch.empty(0)
         cluster_to_indices = {}
         if FLAGS.memory_strategy == "clusters":  
-            cluster_centroids, cluster_to_indices = build_memory_clusters(memory_dataset, num_clusters=10, rng=rng)
+            cluster_centroids, cluster_to_indices = build_memory_clusters(memory_dataset, num_clusters=20, rng=rng)
 
         # training process
         if modality == 'memory' or modality == 'encoder_memory':
