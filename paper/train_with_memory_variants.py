@@ -337,7 +337,7 @@ def run_experiment(config:dict, modality:str):
         cluster_centroids = torch.empty(0)
         cluster_to_indices = {}
         if FLAGS.memory_strategy == "clusters":
-            recompute_every = 1 
+            recompute_every = 10 
             num_clusters = 20
             cluster_centroids, cluster_to_indices = build_memory_clusters(
                 memory_dataset,
