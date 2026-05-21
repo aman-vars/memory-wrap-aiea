@@ -80,21 +80,31 @@ def build_memory_clusters(memory_dataset: torch.utils.data.Dataset, num_clusters
     return cluster_centroids, cluster_to_indices
 
 
-def compute_top_k_nearest_indices(anchor_image: torch.Tensor, memory_dataset: torch.utils.data.Dataset, k: int) -> List[int]:
-    """Returns indices of the k closest training images to `anchor_image` in raw pixel L2 distance."""
+def build_memory_bank(memory_dataset: torch.utils.data.Dataset) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Loads memory set once: flattened rows for distance search and cached images for retrieval."""
+    n = len(memory_dataset)
+    if n == 0:
+        raise RuntimeError("Cannot build memory bank from an empty memory dataset.")
+    flat_rows = []
+    image_rows = []
+    for idx in range(n):
+        img = memory_dataset[idx][0].cpu()
+        image_rows.append(img)
+        flat_rows.append(img.view(-1))
+    memory_flat = torch.stack(flat_rows, dim=0)
+    memory_images = torch.stack(image_rows, dim=0)
+    return memory_flat, memory_images
+
+
+def compute_top_k_nearest_indices(anchor_image: torch.Tensor, memory_flat: torch.Tensor, k: int) -> torch.Tensor:
+    """Returns indices of k nearest memory rows to anchor_image (squared L2 on flattened pixels)."""
     anchor_flat = anchor_image.view(-1)
-    dist_idx = [] # [(distance from anchor, idx in memory dataset)]
-    for idx in range(len(memory_dataset)):
-        candidate_img = memory_dataset[idx][0]
-        candidate_flat = candidate_img.cpu().view(-1) # flattens
-        dist = torch.norm(anchor_flat - candidate_flat, p=2)
-        dist_idx.append((dist.item(), idx))
-    dist_idx.sort(key=lambda t: t[0])
-    k_safe = min(k, len(dist_idx)) 
-    return [dist_idx[i][1] for i in range(k_safe)]
+    sq_dists = (memory_flat - anchor_flat).pow(2).sum(dim=1)
+    k_safe = min(k, memory_flat.shape[0])
+    return torch.topk(sq_dists, k=k_safe, largest=False).indices
 
 
-def build_memory(strategy: str, data: torch.Tensor, y: torch.Tensor, mem_loader: torch.utils.data.DataLoader, memory_dataset: torch.utils.data.Dataset, class_to_indices: Dict[int, List[int]], memory_size: int, rng: random.Random, cluster_centroids: torch.Tensor, cluster_to_indices: Dict[int, List[int]]) -> torch.Tensor:
+def build_memory(strategy: str, data: torch.Tensor, y: torch.Tensor, mem_loader: torch.utils.data.DataLoader, memory_dataset: torch.utils.data.Dataset, class_to_indices: Dict[int, List[int]], memory_size: int, rng: random.Random, cluster_centroids: torch.Tensor, cluster_to_indices: Dict[int, List[int]], memory_flat: torch.Tensor, memory_images: torch.Tensor) -> torch.Tensor:
     """Build one batch-level memory tensor with shape [memory_size, C, H, W]."""
     # baseline (random shuffling) 
     if strategy == "baseline":
@@ -105,10 +115,11 @@ def build_memory(strategy: str, data: torch.Tensor, y: torch.Tensor, mem_loader:
     if strategy == "top_k":
         if data.numel() == 0:
             raise RuntimeError("Empty input batch encountered while building top_k memory.")
+        if memory_flat.numel() == 0 or memory_images.numel() == 0:
+            raise RuntimeError("top_k strategy requires precomputed memory_flat and memory_images.")
         batch_anchor = data.mean(dim=0).cpu()
-        nearest_indices = compute_top_k_nearest_indices(batch_anchor, memory_dataset, memory_size)
-        memory_set = [memory_dataset[idx][0] for idx in nearest_indices]
-        return torch.stack(memory_set, dim=0)
+        nearest_indices = compute_top_k_nearest_indices(batch_anchor, memory_flat, memory_size)
+        return memory_images[nearest_indices]
 
     # clustering
     if strategy == "clusters":
@@ -148,7 +159,7 @@ def build_memory(strategy: str, data: torch.Tensor, y: torch.Tensor, mem_loader:
     return torch.stack(memory_images, dim=0)
 
 
-def train_memory_model(model:torch.nn.Module,loaders:List[torch.utils.data.DataLoader],optimizer:torch.optim.Optimizer,scheduler:torch.optim.lr_scheduler._LRScheduler,loss_criterion:torch.nn.modules.loss, num_epochs:int,device:torch.device, memory_strategy:str, memory_dataset:torch.utils.data.Dataset, class_to_indices:Dict[int, List[int]], memory_size:int, rng:random.Random, cluster_centroids:torch.Tensor, cluster_to_indices:Dict[int, List[int]])->torch.nn.Module:
+def train_memory_model(model:torch.nn.Module, loaders:List[torch.utils.data.DataLoader], optimizer:torch.optim.Optimizer, scheduler:torch.optim.lr_scheduler._LRScheduler, loss_criterion:torch.nn.modules.loss, num_epochs:int, device:torch.device, memory_strategy:str, memory_dataset:torch.utils.data.Dataset, class_to_indices:Dict[int, List[int]], memory_size:int, rng:random.Random, cluster_centroids:torch.Tensor, cluster_to_indices:Dict[int, List[int]], memory_flat:torch.Tensor, memory_images:torch.Tensor) -> torch.nn.Module:
     """ Function to train a model with a Memory Wrap layer (in the paper both
     the baseline variant and Memory Wrap)
 
@@ -183,7 +194,20 @@ def train_memory_model(model:torch.nn.Module,loaders:List[torch.utils.data.DataL
             # input
             data = data.to(device)
             y = y.to(device)
-            memory_input = build_memory(strategy=memory_strategy, data=data, y=y, mem_loader=mem_loader, memory_dataset=memory_dataset, class_to_indices=class_to_indices, memory_size=memory_size, rng=rng, cluster_centroids=cluster_centroids, cluster_to_indices=cluster_to_indices)
+            memory_input = build_memory(
+                strategy=memory_strategy,
+                data=data,
+                y=y,
+                mem_loader=mem_loader,
+                memory_dataset=memory_dataset,
+                class_to_indices=class_to_indices,
+                memory_size=memory_size,
+                rng=rng,
+                cluster_centroids=cluster_centroids,
+                cluster_to_indices=cluster_to_indices,
+                memory_flat=memory_flat,
+                memory_images=memory_images,
+            )
             memory_input = memory_input.to(device)
             
             # perform training step
@@ -320,12 +344,35 @@ def run_experiment(config:dict,modality:str):
         # precompute clusters if `clusters` strategy; otherwise empty
         cluster_centroids = torch.empty(0)
         cluster_to_indices = {}
-        if FLAGS.memory_strategy == "clusters":  
+        if FLAGS.memory_strategy == "clusters":
             cluster_centroids, cluster_to_indices = build_memory_clusters(memory_dataset, num_clusters=20, rng=rng)
+
+        # precompute memory bank for top_k (flattened vectors + cached images)
+        memory_flat = torch.empty(0)
+        memory_images = torch.empty(0)
+        if FLAGS.memory_strategy == "top_k":
+            memory_flat, memory_images = build_memory_bank(memory_dataset)
 
         # training process
         if modality == 'memory' or modality == 'encoder_memory':
-            model = train_memory_model(model, [train_loader, mem_loader], optimizer, scheduler, loss_criterion, config[dataset_name]['num_epochs'], device=device, memory_strategy=FLAGS.memory_strategy, memory_dataset=memory_dataset, class_to_indices=class_to_indices, memory_size=memory_size, rng=rng, cluster_centroids=cluster_centroids, cluster_to_indices=cluster_to_indices)
+            model = train_memory_model(
+                model,
+                [train_loader, mem_loader],
+                optimizer,
+                scheduler,
+                loss_criterion,
+                config[dataset_name]['num_epochs'],
+                device=device,
+                memory_strategy=FLAGS.memory_strategy,
+                memory_dataset=memory_dataset,
+                class_to_indices=class_to_indices,
+                memory_size=memory_size,
+                rng=rng,
+                cluster_centroids=cluster_centroids,
+                cluster_to_indices=cluster_to_indices,
+                memory_flat=memory_flat,
+                memory_images=memory_images,
+            )
             train_time = time.time()
 
             cum_acc =  []
