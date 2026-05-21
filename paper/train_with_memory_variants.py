@@ -54,28 +54,47 @@ def build_class_index_map(memory_dataset:torch.utils.data.Dataset) -> Dict[int,L
     return class_to_indices
 
 
-def build_memory_clusters(memory_dataset:torch.utils.data.Dataset, num_clusters:int, rng:random.Random) -> Tuple[torch.Tensor,Dict[int,List[int]]]:
-    """Picks random memory images as centroids (flattened pixels). Assigns each sample to nearest centroid in L2."""
+def build_memory_clusters(memory_dataset:torch.utils.data.Dataset, num_clusters:int, rng:random.Random, recompute_every:int=1) -> Tuple[torch.Tensor,Dict[int,List[int]]]:
+    """
+    Picks random memory images as centroids (flattened pixels). Assigns each sample to nearest centroid in L2.
+    Every recompute_every assignments, overwrites the modified cluster centroid with the mean of its members.
+    """
     n = len(memory_dataset)
     if n == 0:
         raise RuntimeError("Cannot cluster an empty memory dataset.")
+    if recompute_every < 1:
+        raise ValueError(f"recompute_every must be >= 1, got {recompute_every}")
     k = min(num_clusters, n)
-    
+
     # picks a `k` mem imgs at random that will act as reference for centroids  # essentially initializes centroids
-    centroid_sample_indices = rng.sample(range(n), k=k) 
+    centroid_sample_indices = rng.sample(range(n), k=k)
     centroid_rows = []
-    for ds_idx in centroid_sample_indices: 
+    for ds_idx in centroid_sample_indices:
         img = memory_dataset[ds_idx][0].cpu()
         centroid_rows.append(img.view(-1))
     cluster_centroids = torch.stack(centroid_rows, dim=0)
 
+    def recompute_centroid(cluster_id: int) -> None:
+        """Mean of flattened members; reloads from memory_dataset."""
+        member_indices = cluster_to_indices[cluster_id]
+        if not member_indices:
+            return
+        # Future: cluster_centroids[cluster_id] = memory_flat[member_indices].mean(dim=0)
+        member_flats = [memory_dataset[member_idx][0].cpu().view(-1) for member_idx in member_indices]
+        cluster_centroids[cluster_id] = torch.stack(member_flats, dim=0).mean(dim=0)
+
+
     # assigns every image in mem dataset to nearest centroid
     cluster_to_indices = {c: [] for c in range(k)}
-    for idx in range(n): 
+    assignment_counts = {c: 0 for c in range(k)}
+    for idx in range(n):
         sample_flat = memory_dataset[idx][0].cpu().view(-1)
         dists = torch.norm(cluster_centroids - sample_flat, p=2, dim=1)
-        cluster_id = int(torch.argmin(dists).item())
+        cluster_id = int(torch.argmin(dists).item()) 
         cluster_to_indices.setdefault(cluster_id, []).append(idx)
+        assignment_counts[cluster_id] += 1
+        if assignment_counts[cluster_id] % recompute_every == 0:
+            recompute_centroid(cluster_id)
 
     return cluster_centroids, cluster_to_indices
 
@@ -318,8 +337,15 @@ def run_experiment(config:dict, modality:str):
         cluster_centroids = torch.empty(0)
         cluster_to_indices = {}
         if FLAGS.memory_strategy == "clusters":
-            cluster_centroids, cluster_to_indices = build_memory_clusters(memory_dataset, num_clusters=20, rng=rng)
-
+            recompute_every = 1 
+            num_clusters = 20
+            cluster_centroids, cluster_to_indices = build_memory_clusters(
+                memory_dataset,
+                num_clusters=num_clusters,
+                rng=rng,
+                recompute_every=recompute_every,
+            )
+            
         # precompute memory bank for top_k (flattened vectors + cached images)
         memory_flat = torch.empty(0)
         memory_images = torch.empty(0)
