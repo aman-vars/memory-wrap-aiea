@@ -26,7 +26,7 @@ absl.flags.mark_flag_as_required("modality")
 FLAGS = absl.flags.FLAGS
 
 
-def get_dataset_label(dataset: torch.utils.data.Dataset, idx: int) -> int:
+def get_dataset_label(dataset:torch.utils.data.Dataset, idx:int) -> int:
     """Read class label for one item, handling common dataset layouts."""
     
     # helper
@@ -45,7 +45,7 @@ def get_dataset_label(dataset: torch.utils.data.Dataset, idx: int) -> int:
     return int(label)
 
 
-def build_class_index_map(memory_dataset: torch.utils.data.Dataset) -> Dict[int, List[int]]:
+def build_class_index_map(memory_dataset:torch.utils.data.Dataset) -> Dict[int,List[int]]:
     """Build lookup map from class label to memory dataset indices."""
     class_to_indices: Dict[int, List[int]] = {}
     for idx in range(len(memory_dataset)):
@@ -54,7 +54,7 @@ def build_class_index_map(memory_dataset: torch.utils.data.Dataset) -> Dict[int,
     return class_to_indices
 
 
-def build_memory_clusters(memory_dataset: torch.utils.data.Dataset, num_clusters: int, rng: random.Random) -> Tuple[torch.Tensor, Dict[int, List[int]]]:
+def build_memory_clusters(memory_dataset:torch.utils.data.Dataset, num_clusters:int, rng:random.Random) -> Tuple[torch.Tensor,Dict[int,List[int]]]:
     """Picks random memory images as centroids (flattened pixels). Assigns each sample to nearest centroid in L2."""
     n = len(memory_dataset)
     if n == 0:
@@ -80,7 +80,7 @@ def build_memory_clusters(memory_dataset: torch.utils.data.Dataset, num_clusters
     return cluster_centroids, cluster_to_indices
 
 
-def build_memory_bank(memory_dataset: torch.utils.data.Dataset) -> Tuple[torch.Tensor, torch.Tensor]:
+def build_memory_bank(memory_dataset:torch.utils.data.Dataset) -> Tuple[torch.Tensor,torch.Tensor]:
     """Loads memory set once: flattened rows for distance search and cached images for retrieval."""
     n = len(memory_dataset)
     if n == 0:
@@ -96,7 +96,7 @@ def build_memory_bank(memory_dataset: torch.utils.data.Dataset) -> Tuple[torch.T
     return memory_flat, memory_images
 
 
-def compute_top_k_nearest_indices(anchor_image: torch.Tensor, memory_flat: torch.Tensor, k: int) -> torch.Tensor:
+def compute_top_k_nearest_indices(anchor_image:torch.Tensor, memory_flat:torch.Tensor, k:int) -> torch.Tensor:
     """Returns indices of k nearest memory rows to anchor_image (squared L2 on flattened pixels)."""
     anchor_flat = anchor_image.view(-1)
     sq_dists = (memory_flat - anchor_flat).pow(2).sum(dim=1)
@@ -104,7 +104,7 @@ def compute_top_k_nearest_indices(anchor_image: torch.Tensor, memory_flat: torch
     return torch.topk(sq_dists, k=k_safe, largest=False).indices
 
 
-def build_memory(strategy: str, data: torch.Tensor, y: torch.Tensor, mem_loader: torch.utils.data.DataLoader, memory_dataset: torch.utils.data.Dataset, class_to_indices: Dict[int, List[int]], memory_size: int, rng: random.Random, cluster_centroids: torch.Tensor, cluster_to_indices: Dict[int, List[int]], memory_flat: torch.Tensor, memory_images: torch.Tensor) -> torch.Tensor:
+def build_memory(strategy:str, data:torch.Tensor, y:torch.Tensor, mem_loader:torch.utils.data.DataLoader, memory_dataset:torch.utils.data.Dataset, class_to_indices:Dict[int,List[int]], memory_size:int, rng:random.Random, cluster_centroids:torch.Tensor, cluster_to_indices:Dict[int,List[int]], memory_flat:torch.Tensor, memory_images:torch.Tensor) -> torch.Tensor:
     """Build one batch-level memory tensor with shape [memory_size, C, H, W]."""
     # baseline (random shuffling) 
     if strategy == "baseline":
@@ -159,31 +159,10 @@ def build_memory(strategy: str, data: torch.Tensor, y: torch.Tensor, mem_loader:
     return torch.stack(memory_images, dim=0)
 
 
-def train_memory_model(model:torch.nn.Module, loaders:List[torch.utils.data.DataLoader], optimizer:torch.optim.Optimizer, scheduler:torch.optim.lr_scheduler._LRScheduler, loss_criterion:torch.nn.modules.loss, num_epochs:int, device:torch.device, memory_strategy:str, memory_dataset:torch.utils.data.Dataset, class_to_indices:Dict[int, List[int]], memory_size:int, rng:random.Random, cluster_centroids:torch.Tensor, cluster_to_indices:Dict[int, List[int]], memory_flat:torch.Tensor, memory_images:torch.Tensor) -> torch.nn.Module:
-    """ Function to train a model with a Memory Wrap layer (in the paper both
-    the baseline variant and Memory Wrap)
-
-    Args:
-        model (torch.nn.Module): Model with a Memory Wrap layer to be trained
-        loaders (List[torch.utils.data.DataLoader]): Loaders containing
-            dataset subsets to be used to train the model. The loaders[0] 
-            element is the training dataset, while loaders[1] contain the 
-            dataset used to sample memory sets
-        optimizer (torch.optim.Optimizer): PyTorch optimizer to use to perform
-            training step
-        scheduler (torch.optim.lr_scheduler._LRScheduler): learning rate
-        scheduler to adaptive adjusting the learning rate during training
-        loss_criterion (torch.nn.modules.loss): criterion to use to compute
-            the loss
-        num_epochs (int): number of epoch to train the model
-        device (torch.device): device where the model is stored
-
-    Returns:
-        torch.nn.Module: the trained model
-    """
-    train_loader, mem_loader = loaders
-    
-    # training process 
+def train_memory_model(model:torch.nn.Module, loaders:List[torch.utils.data.DataLoader], optimizer:torch.optim.Optimizer, scheduler:torch.optim.lr_scheduler._LRScheduler, loss_criterion:torch.nn.modules.loss, num_epochs:int, device:torch.device, memory_strategy:str, memory_dataset:torch.utils.data.Dataset, class_to_indices:Dict[int,List[int]], memory_size:int, rng:random.Random, cluster_centroids:torch.Tensor, cluster_to_indices:Dict[int,List[int]], memory_flat:torch.Tensor, memory_images:torch.Tensor) -> torch.nn.Module:
+    """Function to train a model with a Memory Wrap layer"""
+    # training process
+    train_loader, mem_loader = loaders 
     model.train()
 
     scaler = torch.cuda.amp.GradScaler()
@@ -278,17 +257,11 @@ def train_std_model(model:torch.nn.Module,train_loader:torch.utils.data.DataLoad
     return model
 
 
-def run_experiment(config:dict,modality:str):
-    """Method to run an experiment. Each experiment is composed by n
+def run_experiment(config:dict, modality:str):
+    """
+    Method to run an experiment. Each experiment is composed by n
     runs, defined in the config dictionary, where in each of them a new
     model is trained.
-
-    Args:
-        config (dict): Dictionary containing the configuration of the models
-            to train.
-        modality (str): Model type. One of [std, memory, encoder_memory] where
-            std is the standard model, memory is the baseline that uses only the
-            memory and encoder_memory is Memory Wrap
     """
     # load model
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -408,7 +381,8 @@ def run_experiment(config:dict,modality:str):
             pickle.dump( info, open( path_saving_model+"conf.p", "wb" ) )
 
         # log
-        print("Run:{} | Best Loss:{:.4f} | Accuracy {:.2f} | Mean Accuracy:{:.2f} | Std Dev Accuracy:{:.2f}\tT:{:.2f}min\tE:{:.2f}".format(run+1,best_loss,best_acc, np.mean(run_acc), np.std(run_acc),(train_time -run_time)/60,(end_eval_time -init_eval_time)/60))
+        print("Run:{} | Best Loss:{:.4f} | Accuracy {:.2f} | Mean Accuracy:{:.2f} | Std Dev Accuracy:{:.2f}\tT:{:.2f}min\tE:{:.2f}"
+              .format(run+1, best_loss, best_acc, np.mean(run_acc), np.std(run_acc), (train_time-run_time)/60, (end_eval_time-init_eval_time)/60))
 
 
 
